@@ -8,6 +8,9 @@ use winit::{
     window::{Window, WindowBuilder},
 };
 
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::prelude::*;
+
 mod texture;
 
 #[repr(C)]
@@ -62,7 +65,7 @@ const VERTICES: &[Vertex] = &[
     }, // E
 ];
 
-const INDICES: &[u16] = &[0, 1, 4, 1, 2, 4, 2, 3, 4];
+const INDICES: &[u16] = &[0, 1, 4, 1, 2, 4, 2, 3, 4, /* padding */ 0];
 
 struct State<'a> {
     surface: wgpu::Surface<'a>,
@@ -74,13 +77,10 @@ struct State<'a> {
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     num_indices: u32,
+    // NEW!
     #[allow(dead_code)]
     diffuse_texture: texture::Texture,
     diffuse_bind_group: wgpu::BindGroup,
-    #[allow(dead_code)]
-    cartoon_texture: texture::Texture,
-    cartoon_bind_group: wgpu::BindGroup,
-    is_space_pressed: bool,
     window: &'a Window,
 }
 
@@ -98,12 +98,10 @@ impl<'a> State<'a> {
             ..Default::default()
         });
 
-        // # Safety
-        //
-        // The surface needs to live as long as the window that created it.
-        // State owns the window so this should be safe.
+        // you can render to this
         let surface = instance.create_surface(window).unwrap();
 
+        // this will translate everything to your gpu driver
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::default(),
@@ -112,10 +110,14 @@ impl<'a> State<'a> {
             })
             .await
             .unwrap();
+
+        // the device is an abstraction of your gpu, the queue let's you "give" things to your gpu
         let (device, queue) = adapter
             .request_device(
+                // this will give you the device that fits your limiations and features
                 &wgpu::DeviceDescriptor {
                     label: None,
+                    // there might be one gpu driver that has a certain feature
                     required_features: wgpu::Features::empty(),
                     // WebGL doesn't support all of wgpu's features, so if
                     // we're building for the web we'll have to disable some.
@@ -131,6 +133,7 @@ impl<'a> State<'a> {
             .await
             .unwrap();
 
+        // everything that your surface has to offer
         let surface_caps = surface.get_capabilities(&adapter);
         // Shader code in this tutorial assumes an Srgb surface texture. Using a different
         // one will result all the colors comming out darker. If you want to support non
@@ -141,6 +144,7 @@ impl<'a> State<'a> {
             .copied()
             .find(|f| f.is_srgb())
             .unwrap_or(surface_caps.formats[0]);
+
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,
@@ -152,9 +156,16 @@ impl<'a> State<'a> {
             desired_maximum_frame_latency: 2,
         };
 
+        // get a picture as bytes and create a Texture from it
+        let diffuse_bytes = include_bytes!("happy-tree.png");
+        let diffuse_texture =
+            texture::Texture::from_bytes(&device, &queue, diffuse_bytes, "happy-tree.png").unwrap();
+
+        // how can the texture be accessed by the shader (only the layout)
         let texture_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 entries: &[
+                    // sampled texture
                     wgpu::BindGroupLayoutEntry {
                         binding: 0,
                         visibility: wgpu::ShaderStages::FRAGMENT,
@@ -165,6 +176,7 @@ impl<'a> State<'a> {
                         },
                         count: None,
                     },
+                    // the sampler
                     wgpu::BindGroupLayoutEntry {
                         binding: 1,
                         visibility: wgpu::ShaderStages::FRAGMENT,
@@ -175,10 +187,10 @@ impl<'a> State<'a> {
                 label: Some("texture_bind_group_layout"),
             });
 
-        let diffuse_bytes = include_bytes!("happy-tree.png");
-        let diffuse_texture =
-            texture::Texture::from_bytes(&device, &queue, diffuse_bytes, "happy-tree.png").unwrap();
-
+        // creating the actual bindgroup, which can be found in the shader. This way you can have
+        // multiple bindgroups which can be swapped, because they have the same layout.
+        // where the view is a window to the texturedata and the sampler will take each pixel and
+        // put it in the shader
         let diffuse_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: &texture_bind_group_layout,
             entries: &[
@@ -194,31 +206,13 @@ impl<'a> State<'a> {
             label: Some("diffuse_bind_group"),
         });
 
-        let cartoon_bytes = include_bytes!("happy-tree-cartoon.png");
-        let cartoon_texture =
-            texture::Texture::from_bytes(&device, &queue, cartoon_bytes, "happy-tree-cartoon.png")
-                .unwrap();
-
-        let cartoon_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &texture_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&cartoon_texture.view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&cartoon_texture.sampler),
-                },
-            ],
-            label: Some("cartoon_bind_group"),
-        });
-
+        // create the shader
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("texture.wgsl").into()),
         });
 
+        // the pipeline layout is fit to the bindgroup
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Render Pipeline Layout"),
@@ -226,6 +220,7 @@ impl<'a> State<'a> {
                 push_constant_ranges: &[],
             });
 
+        // pipeline is created with the layout and setting the main for vertex and fragment
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Render Pipeline"),
             layout: Some(&render_pipeline_layout),
@@ -264,7 +259,7 @@ impl<'a> State<'a> {
             depth_stencil: None,
             multisample: wgpu::MultisampleState {
                 count: 1,
-                mask: !0,
+                mask: u64::max_value(),
                 alpha_to_coverage_enabled: false,
             },
             // If the pipeline will be used with a multiview render pass, this
@@ -291,16 +286,13 @@ impl<'a> State<'a> {
             device,
             queue,
             config,
+            size,
             render_pipeline,
             vertex_buffer,
             index_buffer,
             num_indices,
             diffuse_texture,
             diffuse_bind_group,
-            cartoon_texture,
-            cartoon_bind_group,
-            size,
-            is_space_pressed: false,
             window,
         }
     }
@@ -318,22 +310,9 @@ impl<'a> State<'a> {
         }
     }
 
+    #[allow(unused_variables)]
     fn input(&mut self, event: &WindowEvent) -> bool {
-        match event {
-            WindowEvent::KeyboardInput {
-                event:
-                    KeyEvent {
-                        state,
-                        physical_key: PhysicalKey::Code(KeyCode::KeyE),
-                        ..
-                    },
-                ..
-            } => {
-                self.is_space_pressed = *state == ElementState::Pressed;
-                true
-            }
-            _ => false,
-        }
+        false
     }
 
     fn update(&mut self) {}
@@ -371,14 +350,8 @@ impl<'a> State<'a> {
                 timestamp_writes: None,
             });
 
-            let bind_group = if self.is_space_pressed {
-                &self.diffuse_bind_group
-            } else {
-                &self.cartoon_bind_group
-            };
-
             render_pass.set_pipeline(&self.render_pipeline);
-            render_pass.set_bind_group(0, bind_group, &[]);
+            render_pass.set_bind_group(0, &self.diffuse_bind_group, &[]);
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
             render_pass.draw_indexed(0..self.num_indices, 0, 0..1);
@@ -391,10 +364,38 @@ impl<'a> State<'a> {
     }
 }
 
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen(start))]
 pub async fn run() {
-    env_logger::init();
+    cfg_if::cfg_if! {
+        if #[cfg(target_arch = "wasm32")] {
+            std::panic::set_hook(Box::new(console_error_panic_hook::hook));
+            console_log::init_with_level(log::Level::Warn).expect("Could't initialize logger");
+        } else {
+            env_logger::init();
+        }
+    }
+
     let event_loop = EventLoop::new().unwrap();
     let window = WindowBuilder::new().build(&event_loop).unwrap();
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        // Winit prevents sizing with CSS, so we have to set
+        // the size manually when on web.
+        use winit::dpi::PhysicalSize;
+        let _ = window.request_inner_size(PhysicalSize::new(450, 400));
+
+        use winit::platform::web::WindowExtWebSys;
+        web_sys::window()
+            .and_then(|win| win.document())
+            .and_then(|doc| {
+                let dst = doc.get_element_by_id("wasm-example")?;
+                let canvas = web_sys::Element::from(window.canvas()?);
+                dst.append_child(&canvas).ok()?;
+                Some(())
+            })
+            .expect("Couldn't append canvas to document body.");
+    }
 
     // State::new uses async code, so we're going to wait for it to finish
     let mut state = State::new(&window).await;
@@ -443,6 +444,7 @@ pub async fn run() {
                                         log::error!("OutOfMemory");
                                         control_flow.exit();
                                     }
+
                                     // This happens when the a frame takes too long to present
                                     Err(wgpu::SurfaceError::Timeout) => {
                                         log::warn!("Surface timeout")

@@ -8,33 +8,27 @@ use winit::{
     window::{Window, WindowBuilder},
 };
 
-mod texture;
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::prelude::*;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct Vertex {
     position: [f32; 3],
-    tex_coords: [f32; 2],
+    color: [f32; 3],
 }
 
 impl Vertex {
+    const ATTRIBS: [wgpu::VertexAttribute; 2] =
+        wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
+
     fn desc() -> wgpu::VertexBufferLayout<'static> {
         use std::mem;
+
         wgpu::VertexBufferLayout {
-            array_stride: mem::size_of::<Vertex>() as wgpu::BufferAddress,
+            array_stride: mem::size_of::<Self>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &[
-                wgpu::VertexAttribute {
-                    offset: 0,
-                    shader_location: 0,
-                    format: wgpu::VertexFormat::Float32x3,
-                },
-                wgpu::VertexAttribute {
-                    offset: mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
-                    shader_location: 1,
-                    format: wgpu::VertexFormat::Float32x2,
-                },
-            ],
+            attributes: &Self::ATTRIBS,
         }
     }
 }
@@ -42,27 +36,82 @@ impl Vertex {
 const VERTICES: &[Vertex] = &[
     Vertex {
         position: [-0.0868241, 0.49240386, 0.0],
-        tex_coords: [0.4131759, 0.00759614],
+        color: [0.5, 0.0, 0.5],
     }, // A
     Vertex {
         position: [-0.49513406, 0.06958647, 0.0],
-        tex_coords: [0.0048659444, 0.43041354],
+        color: [0.2, 0.1, 0.5],
     }, // B
     Vertex {
         position: [-0.21918549, -0.44939706, 0.0],
-        tex_coords: [0.28081453, 0.949397],
+        color: [0.3, 0.4, 0.5],
     }, // C
     Vertex {
         position: [0.35966998, -0.3473291, 0.0],
-        tex_coords: [0.85967, 0.84732914],
+        color: [0.2, 0.3, 0.5],
     }, // D
     Vertex {
         position: [0.44147372, 0.2347359, 0.0],
-        tex_coords: [0.9414737, 0.2652641],
+        color: [0.5, 0.0, 0.5],
     }, // E
 ];
 
-const INDICES: &[u16] = &[0, 1, 4, 1, 2, 4, 2, 3, 4];
+// // might be complete overkill
+// #[repr(C)]
+// #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+// struct Position([f32; 3]);
+//
+// #[repr(C)]
+// #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+// struct Color([f32; 3]);
+
+// impl Vertex {
+//     fn desc() -> wgpu::VertexBufferLayout<'static> {
+//         wgpu::VertexBufferLayout {
+//             array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
+//             step_mode: wgpu::VertexStepMode::Vertex,
+//             attributes: &[
+//                 wgpu::VertexAttribute {
+//                     offset: 0,
+//                     // location in the shader: location(0)
+//                     shader_location: 0,
+//                     format: wgpu::VertexFormat::Float32x3,
+//                 },
+//                 wgpu::VertexAttribute {
+//                     offset: std::mem::size_of::<Position>() as wgpu::BufferAddress,
+//                     // location in the shader: location(1)
+//                     shader_location: 1,
+//                     format: wgpu::VertexFormat::Float32x3,
+//                 },
+//             ],
+//         }
+//     }
+// }
+
+// const VERTICES: &[Vertex] = &[
+//     Vertex {
+//         position: Position([-0.0868241, 0.49240386, 0.0]),
+//         color: Color([0.5, 0.0, 0.5]),
+//     }, // A
+//     Vertex {
+//         position: Position([-0.49513406, 0.06958647, 0.0]),
+//         color: Color([0.5, 0.0, 0.5]),
+//     }, // B
+//     Vertex {
+//         position: Position([-0.21918549, -0.44939706, 0.0]),
+//         color: Color([0.5, 0.0, 0.5]),
+//     }, // C
+//     Vertex {
+//         position: Position([0.35966998, -0.3473291, 0.0]),
+//         color: Color([0.5, 0.0, 0.5]),
+//     }, // D
+//     Vertex {
+//         position: Position([0.44147372, 0.2347359, 0.0]),
+//         color: Color([0.5, 0.0, 0.5]),
+//     }, // E
+// ];
+
+const INDICES: &[u16] = &[0, 1, 4, 1, 2, 4, 2, 3, 4, /* padding */ 0];
 
 struct State<'a> {
     surface: wgpu::Surface<'a>,
@@ -71,16 +120,10 @@ struct State<'a> {
     config: wgpu::SurfaceConfiguration,
     size: winit::dpi::PhysicalSize<u32>,
     render_pipeline: wgpu::RenderPipeline,
+    // NEW!
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     num_indices: u32,
-    #[allow(dead_code)]
-    diffuse_texture: texture::Texture,
-    diffuse_bind_group: wgpu::BindGroup,
-    #[allow(dead_code)]
-    cartoon_texture: texture::Texture,
-    cartoon_bind_group: wgpu::BindGroup,
-    is_space_pressed: bool,
     window: &'a Window,
 }
 
@@ -112,6 +155,7 @@ impl<'a> State<'a> {
             })
             .await
             .unwrap();
+
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
@@ -152,77 +196,15 @@ impl<'a> State<'a> {
             desired_maximum_frame_latency: 2,
         };
 
-        let texture_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            multisampled: false,
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                        count: None,
-                    },
-                ],
-                label: Some("texture_bind_group_layout"),
-            });
-
-        let diffuse_bytes = include_bytes!("happy-tree.png");
-        let diffuse_texture =
-            texture::Texture::from_bytes(&device, &queue, diffuse_bytes, "happy-tree.png").unwrap();
-
-        let diffuse_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &texture_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&diffuse_texture.view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&diffuse_texture.sampler),
-                },
-            ],
-            label: Some("diffuse_bind_group"),
-        });
-
-        let cartoon_bytes = include_bytes!("happy-tree-cartoon.png");
-        let cartoon_texture =
-            texture::Texture::from_bytes(&device, &queue, cartoon_bytes, "happy-tree-cartoon.png")
-                .unwrap();
-
-        let cartoon_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &texture_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&cartoon_texture.view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&cartoon_texture.sampler),
-                },
-            ],
-            label: Some("cartoon_bind_group"),
-        });
-
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("buffer.wgsl").into()),
         });
 
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Render Pipeline Layout"),
-                bind_group_layouts: &[&texture_bind_group_layout],
+                bind_group_layouts: &[],
                 push_constant_ranges: &[],
             });
 
@@ -291,16 +273,11 @@ impl<'a> State<'a> {
             device,
             queue,
             config,
+            size,
             render_pipeline,
             vertex_buffer,
             index_buffer,
             num_indices,
-            diffuse_texture,
-            diffuse_bind_group,
-            cartoon_texture,
-            cartoon_bind_group,
-            size,
-            is_space_pressed: false,
             window,
         }
     }
@@ -318,22 +295,9 @@ impl<'a> State<'a> {
         }
     }
 
+    #[allow(unused_variables)]
     fn input(&mut self, event: &WindowEvent) -> bool {
-        match event {
-            WindowEvent::KeyboardInput {
-                event:
-                    KeyEvent {
-                        state,
-                        physical_key: PhysicalKey::Code(KeyCode::KeyE),
-                        ..
-                    },
-                ..
-            } => {
-                self.is_space_pressed = *state == ElementState::Pressed;
-                true
-            }
-            _ => false,
-        }
+        false
     }
 
     fn update(&mut self) {}
@@ -371,16 +335,11 @@ impl<'a> State<'a> {
                 timestamp_writes: None,
             });
 
-            let bind_group = if self.is_space_pressed {
-                &self.diffuse_bind_group
-            } else {
-                &self.cartoon_bind_group
-            };
-
             render_pass.set_pipeline(&self.render_pipeline);
-            render_pass.set_bind_group(0, bind_group, &[]);
+            // you might want to have multiple buffers using different slots
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+            // render_pass.draw(0..self.num_vertices, 0..1);
             render_pass.draw_indexed(0..self.num_indices, 0, 0..1);
         }
 
@@ -391,10 +350,38 @@ impl<'a> State<'a> {
     }
 }
 
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen(start))]
 pub async fn run() {
-    env_logger::init();
+    cfg_if::cfg_if! {
+        if #[cfg(target_arch = "wasm32")] {
+            std::panic::set_hook(Box::new(console_error_panic_hook::hook));
+            console_log::init_with_level(log::Level::Warn).expect("Could't initialize logger");
+        } else {
+            env_logger::init();
+        }
+    }
+
     let event_loop = EventLoop::new().unwrap();
     let window = WindowBuilder::new().build(&event_loop).unwrap();
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        // Winit prevents sizing with CSS, so we have to set
+        // the size manually when on web.
+        use winit::dpi::PhysicalSize;
+        let _ = window.request_inner_size(PhysicalSize::new(450, 400));
+
+        use winit::platform::web::WindowExtWebSys;
+        web_sys::window()
+            .and_then(|win| win.document())
+            .and_then(|doc| {
+                let dst = doc.get_element_by_id("wasm-example")?;
+                let canvas = web_sys::Element::from(window.canvas()?);
+                dst.append_child(&canvas).ok()?;
+                Some(())
+            })
+            .expect("Couldn't append canvas to document body.");
+    }
 
     // State::new uses async code, so we're going to wait for it to finish
     let mut state = State::new(&window).await;
@@ -443,6 +430,7 @@ pub async fn run() {
                                         log::error!("OutOfMemory");
                                         control_flow.exit();
                                     }
+
                                     // This happens when the a frame takes too long to present
                                     Err(wgpu::SurfaceError::Timeout) => {
                                         log::warn!("Surface timeout")
