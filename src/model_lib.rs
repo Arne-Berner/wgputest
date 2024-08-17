@@ -1,5 +1,4 @@
 use std::iter;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use cgmath::prelude::*;
 use wgpu::util::DeviceExt;
@@ -28,12 +27,6 @@ pub const OPENGL_TO_WGPU_MATRIX: cgmath::Matrix4<f32> = cgmath::Matrix4::new(
 );
 
 const NUM_INSTANCES_PER_ROW: u32 = 10;
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct Uniforms {
-    time: f32,
-}
 
 #[derive(Debug)]
 struct Camera {
@@ -245,20 +238,16 @@ struct State<'a> {
     camera_controller: CameraController,
     camera_uniform: CameraUniform,
     camera_buffer: wgpu::Buffer,
-    time_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     instances: Vec<Instance>,
     #[allow(dead_code)]
     instance_buffer: wgpu::Buffer,
     depth_texture: texture::Texture,
     window: &'a Window,
-    start: SystemTime,
 }
 
 impl<'a> State<'a> {
     async fn new(window: &'a Window) -> State<'a> {
-        let start = SystemTime::now();
-
         let size = window.inner_size();
 
         // The instance is a handle to our GPU
@@ -368,19 +357,6 @@ impl<'a> State<'a> {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
-        let seconds = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs_f64();
-        let seconds = seconds as f32;
-        let time = Uniforms { time: seconds };
-
-        let time_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Camera Buffer"),
-            contents: bytemuck::cast_slice(&[time]),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-
         const SPACE_BETWEEN: f32 = 3.0;
         let instances = (0..NUM_INSTANCES_PER_ROW)
             .flat_map(|z| {
@@ -413,43 +389,25 @@ impl<'a> State<'a> {
 
         let camera_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::VERTEX,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
                     },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::VERTEX,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                ],
+                    count: None,
+                }],
                 label: Some("camera_bind_group_layout"),
             });
 
         let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: &camera_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: camera_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: time_buffer.as_entire_binding(),
-                },
-            ],
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: camera_buffer.as_entire_binding(),
+            }],
             label: Some("camera_bind_group"),
         });
 
@@ -539,14 +497,12 @@ impl<'a> State<'a> {
             camera,
             camera_controller,
             camera_buffer,
-            time_buffer,
             camera_bind_group,
             camera_uniform,
             instances,
             instance_buffer,
             depth_texture,
             window,
-            start,
         }
     }
 
@@ -577,15 +533,6 @@ impl<'a> State<'a> {
             0,
             bytemuck::cast_slice(&[self.camera_uniform]),
         );
-        let seconds = SystemTime::now()
-            .duration_since(self.start)
-            .unwrap()
-            .as_secs_f64();
-        let seconds = seconds as f32;
-        println!("{}", seconds);
-        let time = Uniforms { time: seconds };
-        self.queue
-            .write_buffer(&self.time_buffer, 0, bytemuck::cast_slice(&[time]));
     }
 
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {

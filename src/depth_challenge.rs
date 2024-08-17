@@ -1,5 +1,6 @@
 use std::iter;
 
+use crate::texture;
 use cgmath::prelude::*;
 
 use wgpu::util::DeviceExt;
@@ -9,8 +10,6 @@ use winit::{
     keyboard::{KeyCode, PhysicalKey},
     window::{Window, WindowBuilder},
 };
-
-mod texture;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -359,7 +358,7 @@ impl DepthPass {
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Shadow Display Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("depth-challenge.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("depth_challenge.wgsl").into()),
         });
 
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {

@@ -82,16 +82,16 @@ pub async fn load_model(
             single_index: true,
             ..Default::default()
         },
-        |p| async move {
-            let mat_text = load_string(&p).await.unwrap();
+        |path| async move {
+            let mat_text = load_string(&path).await.unwrap();
             tobj::load_mtl_buf(&mut BufReader::new(Cursor::new(mat_text)))
         },
     )
     .await?;
 
     let mut materials = Vec::new();
-    for m in obj_materials? {
-        let diffuse_texture = load_texture(&m.diffuse_texture, device, queue).await?;
+    for mat in obj_materials? {
+        let diffuse_texture = load_texture(&mat.diffuse_texture, device, queue).await?;
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout,
             entries: &[
@@ -108,7 +108,7 @@ pub async fn load_model(
         });
 
         materials.push(model::Material {
-            name: m.name,
+            name: mat.name,
             diffuse_texture,
             bind_group,
         })
@@ -116,37 +116,37 @@ pub async fn load_model(
 
     let meshes = models
         .into_iter()
-        .map(|m| {
-            let vertices = (0..m.mesh.positions.len() / 3)
+        .map(|model| {
+            let vertices = (0..model.mesh.positions.len() / 3)
                 .map(|i| {
-                    if m.mesh.normals.is_empty() {
+                    if model.mesh.normals.is_empty() {
                         model::ModelVertex {
                             position: [
-                                m.mesh.positions[i * 3],
-                                m.mesh.positions[i * 3 + 1],
-                                m.mesh.positions[i * 3 + 2],
+                                model.mesh.positions[i * 3],
+                                model.mesh.positions[i * 3 + 1],
+                                model.mesh.positions[i * 3 + 2],
                             ],
                             tex_coords: [
-                                m.mesh.texcoords[i * 2],
-                                1.0 - m.mesh.texcoords[i * 2 + 1],
+                                model.mesh.texcoords[i * 2],
+                                1.0 - model.mesh.texcoords[i * 2 + 1],
                             ],
                             normal: [0.0, 0.0, 0.0],
                         }
                     } else {
                         model::ModelVertex {
                             position: [
-                                m.mesh.positions[i * 3],
-                                m.mesh.positions[i * 3 + 1],
-                                m.mesh.positions[i * 3 + 2],
+                                model.mesh.positions[i * 3],
+                                model.mesh.positions[i * 3 + 1],
+                                model.mesh.positions[i * 3 + 2],
                             ],
                             tex_coords: [
-                                m.mesh.texcoords[i * 2],
-                                1.0 - m.mesh.texcoords[i * 2 + 1],
+                                model.mesh.texcoords[i * 2],
+                                1.0 - model.mesh.texcoords[i * 2 + 1],
                             ],
                             normal: [
-                                m.mesh.normals[i * 3],
-                                m.mesh.normals[i * 3 + 1],
-                                m.mesh.normals[i * 3 + 2],
+                                model.mesh.normals[i * 3],
+                                model.mesh.normals[i * 3 + 1],
+                                model.mesh.normals[i * 3 + 2],
                             ],
                         }
                     }
@@ -160,17 +160,16 @@ pub async fn load_model(
             });
             let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(&format!("{:?} Index Buffer", file_name)),
-                contents: bytemuck::cast_slice(&m.mesh.indices),
+                contents: bytemuck::cast_slice(&model.mesh.indices),
                 usage: wgpu::BufferUsages::INDEX,
             });
 
-            log::info!("Mesh: {}", m.name);
             model::Mesh {
                 name: file_name.to_string(),
                 vertex_buffer,
                 index_buffer,
-                num_elements: m.mesh.indices.len() as u32,
-                material: m.mesh.material_id.unwrap_or(0),
+                num_elements: model.mesh.indices.len() as u32,
+                material: model.mesh.material_id.unwrap_or(0),
             }
         })
         .collect::<Vec<_>>();
