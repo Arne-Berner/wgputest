@@ -59,11 +59,8 @@ struct WgpuContext<'a> {
 impl<'a> WgpuContext<'a> {
     async fn new(window: &'a Window) -> WgpuContext<'a> {
         let size = window.inner_size();
-
-        // The instance is a handle to our GPU
         let instance = wgpu::Instance::default();
-        // clone so that we don't have to worry about lifetimes
-        let surface = instance.create_surface(window.clone()).unwrap();
+        let surface = instance.create_surface(window).unwrap();
 
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -227,7 +224,11 @@ impl<'a> WgpuContext<'a> {
         false
     }
 
-    fn update(&mut self) {}
+    fn update(&mut self) {
+        let time = TimeUniform::new(self.instant);
+        self.queue
+            .write_buffer(&self.uniform_buffer, 0, &time.as_wgsl_bytes().unwrap());
+    }
 
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
         let output = self.surface.get_current_texture()?;

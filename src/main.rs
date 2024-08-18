@@ -1,10 +1,9 @@
 use wgputest::run;
-mod camera;
-mod depth;
-pub mod depth_challenge;
-mod model;
-pub mod simple_lib;
-pub mod texture;
+// mod camera;
+// mod depth;
+// pub mod depth_challenge;
+// mod model;
+// pub mod texture;
 pub mod uniform;
 
 fn main() {

@@ -2,7 +2,7 @@
 
 // We use separate the x and y instead of using a vec2 to avoid wgsl padding.
 struct TimeUniform {
-    time: f32,
+    inner: f32,
 }
 
 struct VertexInput {
@@ -34,5 +34,5 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    return vec4(0.0, 0.0, 0.0, 1.0);
+    return vec4(abs(sin(time.inner)), 0.0, 0.0, 1.0);
 }
