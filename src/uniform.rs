@@ -12,6 +12,8 @@ use winit::{
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
+// TODO create the vertex here, so that it can be used in the shader, instead of creating it there?
+
 #[derive(Debug, ShaderType)]
 struct TimeUniform {
     time: Time,
@@ -24,21 +26,19 @@ struct Time {
 }
 
 impl TimeUniform {
-    fn as_wgsl_bytes(&self) -> encase::internal::Result<Vec<u8>> {
-        let mut buffer = encase::UniformBuffer::new(Vec::new());
-        buffer.write(self)?;
-        Ok(buffer.into_inner())
-    }
-}
-
-impl Default for TimeUniform {
-    fn default() -> Self {
-        let time_uniform = std::time::Instant::now().elapsed().as_secs_f32;
+    fn new(time: std::time::Instant) -> Self {
+        let time_uniform = time.elapsed().as_secs_f32();
         TimeUniform {
             time: Time {
                 inner: time_uniform,
             },
         }
+    }
+
+    fn as_wgsl_bytes(&self) -> encase::internal::Result<Vec<u8>> {
+        let mut buffer = encase::UniformBuffer::new(Vec::new());
+        buffer.write(self)?;
+        Ok(buffer.into_inner())
     }
 }
 
@@ -51,6 +51,9 @@ struct WgpuContext<'a> {
     render_pipeline: wgpu::RenderPipeline,
     // NEW!
     window: &'a Window,
+    instant: std::time::Instant,
+    uniform_bind_group: wgpu::BindGroup,
+    uniform_buffer: wgpu::Buffer,
 }
 
 impl<'a> WgpuContext<'a> {
@@ -84,14 +87,40 @@ impl<'a> WgpuContext<'a> {
             .await
             .unwrap();
 
+        let surface_caps = surface.get_capabilities(&adapter);
+
+        // Shader code in this tutorial assumes an Srgb surface texture. https://en.wikipedia.org/wiki/SRGB
+        // Using a different one will result all the colors comming out darker. If you want to support non
+        // Srgb surfaces, you'll need to account for that when drawing to the frame.
+        // TODO test this instead:
+        // let swapchain_format = swapchain_capabilities.formats[0];
+        let surface_format = surface_caps
+            .formats
+            .iter()
+            .copied()
+            .find(|f| f.is_srgb())
+            .unwrap_or(surface_caps.formats[0]);
+
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format: surface_format,
+            width: size.width,
+            height: size.height,
+            present_mode: surface_caps.present_modes[0],
+            alpha_mode: surface_caps.alpha_modes[0],
+            view_formats: vec![],
+            desired_maximum_frame_latency: 2,
+        };
+
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Shader"),
             // harder to understand but better performance
-            // source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!("buffer.wgsl").into())),
-            source: wgpu::ShaderSource::Wgsl(include_str!("buffer.wgsl").into()),
+            // source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!("uniform.wgsl").into())),
+            source: wgpu::ShaderSource::Wgsl(include_str!("uniform.wgsl").into()),
         });
 
-        let time = TimeUniform::default();
+        let instant = std::time::Instant::now();
+        let time = TimeUniform::new(instant);
         // 2. the uniform buffer itself is created.
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Vertex Buffer"),
@@ -110,6 +139,7 @@ impl<'a> WgpuContext<'a> {
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
             entries: &[wgpu::BindGroupLayoutEntry {
+                // this is the @binding field @group will be filled in .set_bind_group
                 binding: 0,
                 visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
@@ -120,7 +150,7 @@ impl<'a> WgpuContext<'a> {
                 count: None,
             }],
         });
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: &bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
@@ -133,82 +163,36 @@ impl<'a> WgpuContext<'a> {
             }],
         });
 
-        let render_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("Render Pipeline Layout"),
-                // 4. the bind group layout is attached to the pipeline layout.
-                bind_group_layouts: &[],
-                push_constant_ranges: &[],
-            });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Render Pipeline Layout"),
+            // 4. the bind group layout is attached to the pipeline layout.
+            bind_group_layouts: &[&bind_group_layout],
+            push_constant_ranges: &[],
+        });
 
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Render Pipeline"),
-            layout: Some(&render_pipeline_layout),
+            layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: "vs_main",
-                buffers: &[Vertex::desc()],
                 compilation_options: Default::default(),
+                // TODO must this be filled, because it was init?
+                buffers: &[],
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
                 entry_point: "fs_main",
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: config.format,
-                    blend: Some(wgpu::BlendState {
-                        color: wgpu::BlendComponent::REPLACE,
-                        alpha: wgpu::BlendComponent::REPLACE,
-                    }),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
                 compilation_options: Default::default(),
+                targets: &[Some(config.format.into())],
             }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: Some(wgpu::Face::Back),
-                // Setting this to anything other than Fill requires Features::POLYGON_MODE_LINE
-                // or Features::POLYGON_MODE_POINT
-                polygon_mode: wgpu::PolygonMode::Fill,
-                // Requires Features::DEPTH_CLIP_CONTROL
-                unclipped_depth: false,
-                // Requires Features::CONSERVATIVE_RASTERIZATION
-                conservative: false,
-            },
+            primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
-            multisample: wgpu::MultisampleState {
-                count: 1,
-                mask: !0,
-                alpha_to_coverage_enabled: false,
-            },
-            // If the pipeline will be used with a multiview render pass, this
-            // indicates how many array layers the attachments will have.
+            multisample: wgpu::MultisampleState::default(),
             multiview: None,
             // Useful for optimizing shader compilation on Android
             cache: None,
         });
-
-        let surface_caps = surface.get_capabilities(&adapter);
-        // Shader code in this tutorial assumes an Srgb surface texture. Using a different
-        // one will result all the colors comming out darker. If you want to support non
-        // Srgb surfaces, you'll need to account for that when drawing to the frame.
-        let surface_format = surface_caps
-            .formats
-            .iter()
-            .copied()
-            .find(|f| f.is_srgb())
-            .unwrap_or(surface_caps.formats[0]);
-        let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format: surface_format,
-            width: size.width,
-            height: size.height,
-            present_mode: surface_caps.present_modes[0],
-            alpha_mode: surface_caps.alpha_modes[0],
-            view_formats: vec![],
-            desired_maximum_frame_latency: 2,
-        };
 
         // 5. the uniform buffer and the bind group are stored alongside the pipeline.
         Self {
@@ -218,10 +202,10 @@ impl<'a> WgpuContext<'a> {
             config,
             size,
             render_pipeline,
-            vertex_buffer,
-            index_buffer,
-            num_indices,
             window,
+            instant,
+            uniform_buffer,
+            uniform_bind_group,
         }
     }
 
@@ -265,8 +249,8 @@ impl<'a> WgpuContext<'a> {
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.1,
-                            g: 0.2,
+                            r: 0.5,
+                            g: 0.4,
                             b: 0.3,
                             a: 1.0,
                         }),
@@ -280,10 +264,8 @@ impl<'a> WgpuContext<'a> {
 
             render_pass.set_pipeline(&self.render_pipeline);
             // you might want to have multiple buffers using different slots
-            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-            // render_pass.draw(0..self.num_vertices, 0..1);
-            render_pass.draw_indexed(0..self.num_indices, 0, 0..1);
+            render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+            render_pass.draw(0..3, 0..1);
         }
 
         self.queue.submit(iter::once(encoder.finish()));
