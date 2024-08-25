@@ -19,7 +19,6 @@ struct TimeUniform {
     time: Time,
 }
 
-// TODO will this crash?
 #[derive(Debug, ShaderType)]
 struct Time {
     inner: f32,
@@ -86,17 +85,19 @@ impl<'a> WgpuContext<'a> {
 
         let surface_caps = surface.get_capabilities(&adapter);
 
-        // Shader code in this tutorial assumes an Srgb surface texture. https://en.wikipedia.org/wiki/SRGB
-        // Using a different one will result all the colors comming out darker. If you want to support non
-        // Srgb surfaces, you'll need to account for that when drawing to the frame.
-        // TODO test this instead:
+        // this typically is in srgb
         // let swapchain_format = swapchain_capabilities.formats[0];
-        let surface_format = surface_caps
-            .formats
-            .iter()
-            .copied()
-            .find(|f| f.is_srgb())
-            .unwrap_or(surface_caps.formats[0]);
+
+        // this will bring it to a linear color space (which is darker)
+        let surface_format = surface_caps.formats[0].remove_srgb_suffix();
+
+        // this is guaranteed srgb
+        // surface_caps
+        //     .formats
+        //     .iter()
+        //     .copied()
+        //     .find(|f| f.is_srgb())
+        //     .unwrap_or(surface_caps.formats[0]);
 
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -174,7 +175,6 @@ impl<'a> WgpuContext<'a> {
                 module: &shader,
                 entry_point: "vs_main",
                 compilation_options: Default::default(),
-                // TODO must this be filled, because it was init?
                 buffers: &[],
             },
             fragment: Some(wgpu::FragmentState {

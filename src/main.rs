@@ -1,6 +1,6 @@
 use wgputest::run;
 // mod camera;
-// mod depth;
+mod depth;
 // pub mod depth_challenge;
 // mod model;
 // pub mod texture;
